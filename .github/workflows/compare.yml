@@ -1,0 +1,48 @@
+name: compare
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compare.yml'
+      - 'tools/**'
+      - 'ai4i_dl_recall.py'
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+      TF_CPP_MIN_LOG_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 패키지 설치
+        run: pip install -q tensorflow-cpu scikit-learn pandas numpy matplotlib
+      - name: 데이터 다운로드 (UCI)
+        run: |
+          mkdir -p ~/ws/robot
+          curl -sSL -o ai4i.zip "https://archive.ics.uci.edu/static/public/601/ai4i+2020+predictive+maintenance+dataset.zip"
+          unzip -o -q ai4i.zip -d ~/ws/robot
+          ls -la ~/ws/robot
+      - name: 원본 실행
+        run: |
+          mkdir -p results
+          python ai4i_dl_recall.py 2>&1 | grep -v 'step' | tee results/original.txt
+      - name: 파생변수 버전 실행
+        run: |
+          python tools/make_features.py
+          python ai4i_dl_features.py 2>&1 | grep -v 'step' | tee results/features.txt
+      - name: 결과 커밋
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git add results
+          git commit -m '비교 실행 결과 [skip ci]' || echo 'no changes'
+          git push
