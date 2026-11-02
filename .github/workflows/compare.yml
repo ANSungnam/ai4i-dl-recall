@@ -30,19 +30,15 @@ jobs:
           mkdir -p ~/ws/robot
           curl -sSL -o ai4i.zip "https://archive.ics.uci.edu/static/public/601/ai4i+2020+predictive+maintenance+dataset.zip"
           unzip -o -q ai4i.zip -d ~/ws/robot
-          ls -la ~/ws/robot
-      - name: 원본 실행
+      - name: 가중치 x 임계값 실험
         run: |
           mkdir -p results
-          python ai4i_dl_recall.py 2>&1 | grep -v 'step' | tee results/original.txt
-      - name: 파생변수 버전 실행
-        run: |
-          python tools/make_features.py
-          python ai4i_dl_features.py 2>&1 | grep -v 'step' | tee results/features.txt
+          python tools/sweep.py 2>&1 | grep -v -E 'step|super\(\)|warn' | tee results/sweep.txt
       - name: 결과 커밋
         run: |
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
           git add results
-          git commit -m '비교 실행 결과 [skip ci]' || echo 'no changes'
+          git commit -m '실험 결과 [skip ci]' || echo 'no changes'
+          git pull --rebase
           git push
