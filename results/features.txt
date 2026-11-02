@@ -1,0 +1,26 @@
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/keras/src/layers/core/dense.py:107: UserWarning: Do not pass an `input_shape`/`input_dim` argument to a layer. When using Sequential models, prefer using an `Input(shape)` object as the first layer in the model instead.
+  super().__init__(activity_regularizer=activity_regularizer, **kwargs)
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/keras/src/layers/core/dense.py:107: UserWarning: Do not pass an `input_shape`/`input_dim` argument to a layer. When using Sequential models, prefer using an `Input(shape)` object as the first layer in the model instead.
+  super().__init__(activity_regularizer=activity_regularizer, **kwargs)
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/keras/src/layers/core/dense.py:107: UserWarning: Do not pass an `input_shape`/`input_dim` argument to a layer. When using Sequential models, prefer using an `Input(shape)` object as the first layer in the model instead.
+  super().__init__(activity_regularizer=activity_regularizer, **kwargs)
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/keras/src/layers/core/dense.py:107: UserWarning: Do not pass an `input_shape`/`input_dim` argument to a layer. When using Sequential models, prefer using an `Input(shape)` object as the first layer in the model instead.
+  super().__init__(activity_regularizer=activity_regularizer, **kwargs)
+제거할 노이즈 행 수: 27
+노이즈 제거 후 데이터 수: 9973
+고장 비율: 0.0331 (정상 9643 / 고장 330)
+훈련: (5983, 9) 검증: (1995, 9) 테스트: (1995, 9)
+COST_RATIO 1.0 (가중치 1:29) → 검증 재현율 0.727, 검증 정밀도 0.490
+COST_RATIO 2.0 (가중치 1:58) → 검증 재현율 0.818, 검증 정밀도 0.439
+COST_RATIO 3.0 (가중치 1:88) → 검증 재현율 0.848, 검증 정밀도 0.438
+COST_RATIO 5.0 (가중치 1:146) → 검증 재현율 0.894, 검증 정밀도 0.351
+  → 목표 미달: 마지막 모델 채택 (데이터 보강 필요 신호)
+
+=== 테스트셋 평가 ===
+혼동행렬 [[TN FP], [FN TP]]:
+[[1876   53]
+ [  20   46]]
+놓친 고장(FN): 20 건 / 오탐(FP): 53 건
+재현율(Recall) : 0.697
+정밀도(Precision): 0.465
+F1 점수        : 0.558

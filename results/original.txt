@@ -1,0 +1,20 @@
+/opt/hostedtoolcache/Python/3.11.17/x64/lib/python3.11/site-packages/keras/src/layers/core/dense.py:107: UserWarning: Do not pass an `input_shape`/`input_dim` argument to a layer. When using Sequential models, prefer using an `Input(shape)` object as the first layer in the model instead.
+  super().__init__(activity_regularizer=activity_regularizer, **kwargs)
+제거할 노이즈 행 수: 27
+노이즈 제거 후 데이터 수: 9973
+고장 비율: 0.0331 (정상 9643 / 고장 330)
+훈련: (5983, 6) 검증: (1995, 6) 테스트: (1995, 6)
+COST_RATIO 1.0 (가중치 1:29) → 검증 재현율 0.909, 검증 정밀도 0.451
+  → 목표(0.9) 달성, COST_RATIO 1.0 확정
+
+=== 테스트셋 평가 ===
+혼동행렬 [[TN FP], [FN TP]]:
+[[1855   74]
+ [  11   55]]
+놓친 고장(FN): 11 건 / 오탐(FP): 74 건
+재현율(Recall) : 0.833
+정밀도(Precision): 0.426
+F1 점수        : 0.564
+예측 확률 [정상, 고장]: [[1.000000e+00 1.662598e-14]]
+예측 번호: [0]
+예측 결과: ['정상']
