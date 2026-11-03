@@ -6,7 +6,7 @@
 # 설계 원칙
 #   - 입력은 CSV의 센서 특성 6개만 사용 (계산으로 만든 열 없음)
 #   - 증강(class_weight)·임계값 조정 없음, 판정은 고장 확률 0.5 기준
-#   - 출력은 고장 여부 + 고장 유형 5개(멀티태스크), 유형은 결론으로 함께 제시
+#   - 출력은 고장 여부 + 고장유형 5개(멀티태스크), 고장유형은 결론으로 함께 제시
 #
 # 결과 해석 기준 (테스트셋 1,995건)
 #   기준선: 전부 '정상'으로 찍어도 정확도 0.967 (고장 비율 3.3%)
@@ -31,7 +31,7 @@ TARGET_ACC = 0.995                      # 목표 정확도
 
 # ──────────────────────────────────────────────────────────
 # [데이터 확인] 14개 열: UDI, Product ID, Type, 온도 2개, 회전수, 토크, 공구 마모,
-#               Machine failure(정답), TWF·HDF·PWF·OSF·RNF(고장 유형)
+#               Machine failure(정답), TWF·HDF·PWF·OSF·RNF(고장유형)
 # ──────────────────────────────────────────────────────────
 data = pd.read_csv(DIR / 'ai4i2020.csv', encoding='utf-8-sig')
 pd.set_option('display.max_columns', None)     # 열이 생략(...)되지 않게
@@ -41,7 +41,7 @@ print('데이터 크기(행, 열):', data.shape)
 
 # ──────────────────────────────────────────────────────────
 # [전처리 1] 라벨 모순 행 제거
-# 고장 유형 중 하나라도 1이면 Machine failure도 1이어야 하는데, 이것이 어긋난 27행은
+# 고장유형 중 하나라도 1이면 Machine failure도 1이어야 하는데, 이것이 어긋난 27행은
 # 어느 표시가 맞는지 알 수 없어 제거 → 9,973행
 # ──────────────────────────────────────────────────────────
 type_names = ['TWF', 'HDF', 'PWF', 'OSF', 'RNF']   # 공구 마모 / 방열 / 전력 / 과부하 / 무작위
@@ -50,7 +50,7 @@ data = data[flag_any == (data['Machine failure'] == 1)].reset_index(drop=True)
 
 # ──────────────────────────────────────────────────────────
 # [전처리 2] 입력 특성 선택
-# 제외: UDI·Product ID(식별 번호), Machine failure·고장 유형(정답 — 입력에 넣으면 누수)
+# 제외: UDI·Product ID(식별 번호), Machine failure·고장유형(정답 — 입력에 넣으면 누수)
 # ──────────────────────────────────────────────────────────
 feats = ['Type','Air temperature [K]','Process temperature [K]',
          'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
@@ -60,7 +60,7 @@ X = data[feats].copy()
 encoder = LabelEncoder()
 X['Type'] = encoder.fit_transform(X['Type'])
 
-# 정답 2종: 고장 여부(y)와 고장 유형(Y_type, 출력 쪽에만 사용)
+# 정답 2종: 고장 여부(y)와 고장유형(Y_type, 출력 쪽에만 사용)
 y = data['Machine failure'].to_numpy()        # 0 = 정상, 1 = 고장
 Y_type = data[type_names].to_numpy()
 target_names = np.array(['정상', '고장'])
@@ -83,9 +83,10 @@ print(f'훈련 {len(X_train)} / 테스트 {len(X_test)}')
 print(f'기준선(전부 정상) 테스트 정확도: {(y_test == 0).mean():.4f}')
 
 # ──────────────────────────────────────────────────────────
-# [학습] 멀티태스크 신경망 — 은닉층 64-64(ReLU)를 두 출력이 공유
+# [학습] 멀티태스크 신경망 — 은닉층 64-64(ReLU) 하나에서 두 출력이 갈라짐
+#   은닉층은 두 출력의 손실 합을 줄이도록 학습 → 고장 여부와 고장유형을 함께 배움
 #   'fail'  : 고장 확률 1개 → 판정·평가에 사용
-#   'types' : 유형별 확률 5개 → 고장 원인을 결론으로 제시
+#   'types' : 고장유형별 확률 5개 → 고장 원인을 결론으로 제시
 # validation_data는 에폭마다 테스트 성적을 기록만 함(그래프용) — 학습·조정에는 쓰지 않음
 # ──────────────────────────────────────────────────────────
 inputs = Input(shape=(X_train.shape[1],))
@@ -118,9 +119,9 @@ print('3. 재현율(Recall)   :', f'{recall_score(y_test, y_pred):.4f}')
 print(f'   혼동행렬: 맞힌 고장 {tp} / 놓친 고장(미검) {fn} / 오탐(과검) {fp} / 맞힌 정상 {tn}')
 print('   목표 정확도', TARGET_ACC, '→', '달성' if acc >= TARGET_ACC else '미달')
 
-# 결론: 고장 유형별 성적
+# 결론: 고장유형별 성적
 t_pred = (p_types >= 0.5).astype(int)
-print('\n[고장 유형별 결론] 테스트셋')
+print('\n[고장유형별 결론] 테스트셋')
 for i, name in enumerate(type_names):
     n_true = int(T_test[:, i].sum())
     n_hit = int(((T_test[:, i] == 1) & (t_pred[:, i] == 1)).sum())
@@ -168,7 +169,7 @@ X_new = sc.transform(X_new)
 pred_prob, type_prob = model.predict(X_new, verbose=0)
 pred = (pred_prob.ravel() >= 0.5).astype(int)
 print('\n예측 확률 [고장]:', pred_prob)
-print('유형별 확률', type_names, ':', type_prob.round(4))
-print('예측 유형:', [n for n, v in zip(type_names, type_prob.ravel()) if v >= 0.5] or '없음')
+print('고장유형별 확률', type_names, ':', type_prob.round(4))
+print('예측 고장유형:', [n for n, v in zip(type_names, type_prob.ravel()) if v >= 0.5] or '없음')
 print('예측 번호:', pred)
 print('예측 결과:', target_names[pred])
