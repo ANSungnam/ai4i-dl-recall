@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-# AI4I 2020 예지보전 — 딥러닝 고장 분류 (정확도 99.5% 목표, 증강 없음)
+# AI4I 2020 예지보전 — 딥러닝 고장 분류 [전처리, 표준화 미포함]
+# main 버전에서 전처리·표준화·새 데이터 예측을 주석 처리한 비교용 코드
 #
 # 전체 흐름
 #   [전처리]  라벨 모순 행 제거 → 입력 특성 선택 → 문자(Type)를 숫자로 인코딩
@@ -39,21 +40,30 @@ TARGET_ACC = 0.995                      # 목표: 테스트 정확도 99.5% 이�
 # 어느 쪽이 맞는지 알 수 없어서 고치지 않고 뺌 → 9,973행 남음
 # ──────────────────────────────────────────────────────────
 data = pd.read_csv(DIR / 'ai4i2020.csv', encoding='utf-8-sig')
-flag_any = data[['TWF','HDF','PWF','OSF','RNF']].any(axis=1)
-data = data[flag_any == (data['Machine failure'] == 1)].reset_index(drop=True)
+# flag_any = data[['TWF','HDF','PWF','OSF','RNF']].any(axis=1)
+# data = data[flag_any == (data['Machine failure'] == 1)].reset_index(drop=True)   # 전처리 미포함
 
 # ──────────────────────────────────────────────────────────
 # [전처리 2] 입력 특성 선택
 # 제외: UDI·Product ID(단순 식별 번호), TWF~RNF(고장 유형 = 정답이 새는 열)
 # ──────────────────────────────────────────────────────────
-feats = ['Type','Air temperature [K]','Process temperature [K]',
-         'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
-X = data[feats].copy()
+# feats = ['Type','Air temperature [K]','Process temperature [K]',
+#          'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
+# X = data[feats].copy()   # 전처리 미포함
+
+# 입력 = 출력(Machine failure, TWF~RNF)을 뺀 나머지 8개 열 전부
+outputs = ['Machine failure', 'TWF', 'HDF', 'PWF', 'OSF', 'RNF']
+X = data.drop(columns=outputs)
 
 # [전처리 3] 인코딩: 품질 등급 문자를 숫자로 (알파벳순 H → 0, L → 1, M → 2)
 # encoder는 변수로 저장해 두었다가 새 데이터 예측 때 같은 규칙으로 다시 씀
-encoder = LabelEncoder()
-X['Type'] = encoder.fit_transform(X['Type'])
+# encoder = LabelEncoder()
+# X['Type'] = encoder.fit_transform(X['Type'])   # 전처리 미포함
+
+# 실행에 필요한 최소 변환: 문자 열(Product ID, Type)은 신경망에 그대로 못 넣어 숫자 코드로만 바꿈
+for c in ['Product ID', 'Type']:
+    X[c] = X[c].astype('category').cat.codes
+print('입력 열:', list(X.columns))
 
 y = data['Machine failure'].to_numpy()        # 정답: 0 = 정상, 1 = 고장
 target_names = np.array(['정상', '고장'])     # 예측 번호 → 이름 변환용
@@ -65,16 +75,16 @@ target_names = np.array(['정상', '고장'])     # 예측 번호 → 이름 변
 #              고장이 330건뿐이라 무작위로 나누면 테스트에 고장이 쏠리거나 모자랄 수 있음
 # ──────────────────────────────────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
-    X.to_numpy(), y, test_size=0.2, random_state=0, stratify=y)
+    X.to_numpy(dtype=float), y, test_size=0.2, random_state=0, stratify=y)
 
 # ──────────────────────────────────────────────────────────
 # [표준화] 각 특성을 평균 0, 표준편차 1로 맞춤 (온도 300, 회전수 1500처럼 단위 차이 제거)
 # 평균·표준편차는 훈련셋에서만 계산(fit)하고, 테스트셋에는 그 기준을 적용만 함
 # → 테스트셋까지 섞어서 fit하면 시험 문제를 미리 본 셈(데이터 누수)
 # ──────────────────────────────────────────────────────────
-sc = StandardScaler()
-X_train = sc.fit_transform(X_train)
-X_test = sc.transform(X_test)
+# sc = StandardScaler()
+# X_train = sc.fit_transform(X_train)
+# X_test = sc.transform(X_test)   # 표준화 미포함
 print(f'훈련 {len(X_train)} / 테스트 {len(X_test)}')
 print(f'기준선(전부 정상) 테스트 정확도: {(y_test == 0).mean():.4f}')
 
@@ -87,7 +97,7 @@ print(f'기준선(전부 정상) 테스트 정확도: {(y_test == 0).mean():.4f}
 # ──────────────────────────────────────────────────────────
 print(f'\n[학습] 가중치 없이 학습 (목표 정확도 ≥ {TARGET_ACC})')
 model = Sequential([
-    Input(shape=(6,)),                  # 입력 = 특성 6개
+    Input(shape=(X_train.shape[1],)),   # 입력 = 특성 8개
     Dense(64, activation='relu'),
     Dense(64, activation='relu'),
     Dense(1, activation='sigmoid')      # 출력 1개 = 고장 확률 (0~1)
@@ -139,23 +149,23 @@ plt.legend()
 plt.show()
 
 # ──────────────────────────────────────────────────────────
-# [예측] 새로운 데이터 1건
+# [예측] 새로운 데이터 1건 — 이 버전에서는 미포함(아래 전부 주석)
 # encoder.transform(['M']) → array([2])
 # encoder.transform(['M'])[0] → 2
 # 순서: Type, 공기 온도, 공정 온도, 회전 속도, 토크, 공구 마모
 # 샘플이 1개라도 2차원 (1, 6) 형태여야 함
 # ──────────────────────────────────────────────────────────
-X_new = np.array([[
-    encoder.transform(['M'])[0],
-    298.1, 308.6, 1551, 42.8, 0
-]])
+# X_new = np.array([[
+#     encoder.transform(['M'])[0],
+#     298.1, 308.6, 1551, 42.8, 0
+# ]])
 
-# 학습 때 쓴 스케일러로 표준화한 뒤 예측 (새로 fit 금지)
-# 표준화를 빼면 298, 1551 같은 원래 값이 그대로 들어가 확률이 엉뚱하게 튐
-X_new = sc.transform(X_new)
-pred_prob = model.predict(X_new)
-print('예측 확률 [고장]:', pred_prob)              # 출력 1개 = 고장 확률
+# # 학습 때 쓴 스케일러로 표준화한 뒤 예측 (새로 fit 금지)
+# # 표준화를 빼면 298, 1551 같은 원래 값이 그대로 들어가 확률이 엉뚱하게 튐
+# X_new = sc.transform(X_new)
+# pred_prob = model.predict(X_new)
+# print('예측 확률 [고장]:', pred_prob)              # 출력 1개 = 고장 확률
 
-pred = (pred_prob.ravel() >= 0.5).astype(int)       # 고장 확률 0.5 이상 → 고장(1)
-print('예측 번호:', pred)
-print('예측 결과:', target_names[pred])             # 0 → 정상, 1 → 고장
+# pred = (pred_prob.ravel() >= 0.5).astype(int)       # 고장 확률 0.5 이상 → 고장(1)
+# print('예측 번호:', pred)
+# print('예측 결과:', target_names[pred])             # 0 → 정상, 1 → 고장
