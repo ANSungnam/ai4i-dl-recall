@@ -2,6 +2,7 @@
 # AI4I 2020 예지보전 — 딥러닝 고장 분류 (정확도 99.5% 목표, 증강 없음, 물리량 3개 추가, 멀티태스크)
 #
 # 전체 흐름
+#   [확인]    데이터 읽기 → head()로 열 이름·앞 5행 확인
 #   [전처리]  라벨 모순 행 제거 → 입력 특성 선택 → 물리량 3개 추가 → 문자(Type)를 숫자로 인코딩
 #   [분할]    훈련 80% / 테스트 20%
 #   [표준화]  훈련셋 기준으로만 평균·표준편차를 배워서 양쪽에 적용
@@ -33,12 +34,22 @@ DIR = Path('~/ws/robot')
 TARGET_ACC = 0.995                      # 목표: 테스트 정확도 99.5% 이상
 
 # ──────────────────────────────────────────────────────────
+# [데이터 읽기·확인] 열 이름과 앞부분 5행을 먼저 보고 시작
+# 열 14개: UDI, Product ID, Type, 온도 2개, 회전수, 토크, 공구 마모,
+#          Machine failure(정답), TWF·HDF·PWF·OSF·RNF(고장 유형)
+# ──────────────────────────────────────────────────────────
+data = pd.read_csv(DIR / 'ai4i2020.csv', encoding='utf-8-sig')
+pd.set_option('display.max_columns', None)     # 14개 열이 생략(...) 없이 모두 보이게
+pd.set_option('display.width', 200)
+print(data.head())
+print('데이터 크기(행, 열):', data.shape)
+
+# ──────────────────────────────────────────────────────────
 # [전처리 1] 라벨 모순 행 제거
 # 규칙: 고장 유형(TWF·HDF·PWF·OSF·RNF) 중 하나라도 1이면 Machine failure도 1이어야 함
 # 이 규칙이 어긋난 27행(유형 표시 있는데 고장 0: 18행 / 유형 없는데 고장 1: 9행)은
 # 어느 쪽이 맞는지 알 수 없어서 고치지 않고 뺌 → 9,973행 남음
 # ──────────────────────────────────────────────────────────
-data = pd.read_csv(DIR / 'ai4i2020.csv', encoding='utf-8-sig')
 flag_any = data[['TWF','HDF','PWF','OSF','RNF']].any(axis=1)
 data = data[flag_any == (data['Machine failure'] == 1)].reset_index(drop=True)
 
