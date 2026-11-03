@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-# AI4I 2020 예지보전 — 딥러닝 고장 분류 (정확도 99.5% 목표, 증강 없음)
+# AI4I 2020 예지보전 — 딥러닝 고장 분류 (정확도 99.5% 목표, 증강 없음, 물리량 3개 추가)
 #
 # 전체 흐름
-#   [전처리]  라벨 모순 행 제거 → 입력 특성 선택 → 문자(Type)를 숫자로 인코딩
+#   [전처리]  라벨 모순 행 제거 → 입력 특성 선택 → 물리량 3개 추가 → 문자(Type)를 숫자로 인코딩
 #   [분할]    훈련 80% / 테스트 20%
 #   [표준화]  훈련셋 기준으로만 평균·표준편차를 배워서 양쪽에 적용
 #   [학습]    가중치·증강 없이 원래 데이터 분포 그대로 1회 학습
@@ -50,7 +50,23 @@ feats = ['Type','Air temperature [K]','Process temperature [K]',
          'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
 X = data[feats].copy()
 
-# [전처리 3] 인코딩: 품질 등급 문자를 숫자로 (알파벳순 H → 0, L → 1, M → 2)
+# ──────────────────────────────────────────────────────────
+# [전처리 3] 물리량 3개 추가 — 고장과 관련된 '물리량'만 계산해서 넣고,
+# 어디서부터 고장인지(경계값)는 넣지 않음 → 경계는 신경망이 데이터에서 찾음
+#   온도차  [K]    = 공정 온도 − 공기 온도        (열이 빠져나가는 정도)
+#   출력    [W]    = 토크 × 각속도(rpm × 2π / 60)  (기계가 내는 동력)
+#   마모×토크 [min·Nm] = 공구 마모 × 토크          (공구에 쌓인 부하)
+# ──────────────────────────────────────────────────────────
+def add_physics(df):
+    df = df.copy()
+    df['dT [K]'] = df['Process temperature [K]'] - df['Air temperature [K]']
+    df['Power [W]'] = df['Torque [Nm]'] * df['Rotational speed [rpm]'] * 2 * np.pi / 60
+    df['Wear x Torque'] = df['Tool wear [min]'] * df['Torque [Nm]']
+    return df
+
+X = add_physics(X)
+
+# [전처리 4] 인코딩: 품질 등급 문자를 숫자로 (알파벳순 H → 0, L → 1, M → 2)
 # encoder는 변수로 저장해 두었다가 새 데이터 예측 때 같은 규칙으로 다시 씀
 encoder = LabelEncoder()
 X['Type'] = encoder.fit_transform(X['Type'])
@@ -87,7 +103,7 @@ print(f'기준선(전부 정상) 테스트 정확도: {(y_test == 0).mean():.4f}
 # ──────────────────────────────────────────────────────────
 print(f'\n[학습] 가중치 없이 학습 (목표 정확도 ≥ {TARGET_ACC})')
 model = Sequential([
-    Input(shape=(6,)),                  # 입력 = 특성 6개
+    Input(shape=(X_train.shape[1],)),   # 입력 = 원본 6개 + 물리량 3개 = 9개
     Dense(64, activation='relu'),
     Dense(64, activation='relu'),
     Dense(1, activation='sigmoid')      # 출력 1개 = 고장 확률 (0~1)
@@ -142,13 +158,14 @@ plt.show()
 # [예측] 새로운 데이터 1건
 # encoder.transform(['M']) → array([2])
 # encoder.transform(['M'])[0] → 2
-# 순서: Type, 공기 온도, 공정 온도, 회전 속도, 토크, 공구 마모
-# 샘플이 1개라도 2차원 (1, 6) 형태여야 함
+# 순서: Type, 공기 온도, 공정 온도, 회전 속도, 토크, 공구 마모 (물리량 3개는 아래에서 계산)
+# 샘플이 1개라도 2차원 형태여야 함 (물리량 추가 후 (1, 9))
 # ──────────────────────────────────────────────────────────
-X_new = np.array([[
+X_new = pd.DataFrame([[
     encoder.transform(['M'])[0],
     298.1, 308.6, 1551, 42.8, 0
-]])
+]], columns=feats)
+X_new = add_physics(X_new).to_numpy(dtype=float)   # 학습 때와 같은 방식으로 물리량 3개 추가
 
 # 학습 때 쓴 스케일러로 표준화한 뒤 예측 (새로 fit 금지)
 # 표준화를 빼면 298, 1551 같은 원래 값이 그대로 들어가 확률이 엉뚱하게 튐
