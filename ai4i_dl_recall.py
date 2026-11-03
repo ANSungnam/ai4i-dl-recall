@@ -15,7 +15,7 @@
 
 from pathlib import Path
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, recall_score, precision_score, confusion_matrix
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Input
@@ -56,9 +56,11 @@ feats = ['Type','Air temperature [K]','Process temperature [K]',
          'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
 X = data[feats].copy()
 
-# [전처리 3] Type 인코딩 (H → 0, L → 1, M → 2) — encoder는 새 데이터 예측에 재사용
-encoder = LabelEncoder()
-X['Type'] = encoder.fit_transform(X['Type'])
+# [전처리 3] Type 인코딩 — 품질 순서(L < M < H)대로 L → 0, M → 1, H → 2
+# 알파벳순(H → 0, L → 1, M → 2)으로 바꾸면 순서가 뒤섞여 모델이 엉뚱한 크기 관계를 보게 됨
+# (과부하 OSF의 한계값도 L 11,000 < M 12,000 < H 13,000으로 품질 순서를 따름)
+type_map = {'L': 0, 'M': 1, 'H': 2}           # 새 데이터 예측에도 같은 규칙 사용
+X['Type'] = X['Type'].map(type_map)
 
 # 정답 2종: 고장 여부(y)와 고장유형(Y_type, 출력 쪽에만 사용)
 y = data['Machine failure'].to_numpy()        # 0 = 정상, 1 = 고장
@@ -158,10 +160,10 @@ plt.show()
 
 # ──────────────────────────────────────────────────────────
 # [예측] 새 데이터 1건 — 순서: Type, 공기 온도, 공정 온도, 회전 속도, 토크, 공구 마모
-# 샘플 1개도 2차원 (1, 6) 형태, 학습 때의 encoder·scaler를 그대로 사용(새로 fit 금지)
+# 샘플 1개도 2차원 (1, 6) 형태, 학습 때의 type_map·scaler를 그대로 사용(새로 fit 금지)
 # ──────────────────────────────────────────────────────────
 X_new = np.array([[
-    encoder.transform(['M'])[0],        # 'M' → 2
+    type_map['M'],                      # 'M' → 1
     298.1, 308.6, 1551, 42.8, 0
 ]])
 X_new = sc.transform(X_new)
