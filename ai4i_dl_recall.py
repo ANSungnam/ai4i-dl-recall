@@ -85,10 +85,12 @@ X['Type'] = encoder.fit_transform(X['Type'])
 y = data['Machine failure'].to_numpy()        # 정답: 0 = 정상, 1 = 고장
 target_names = np.array(['정상', '고장'])     # 예측 번호 → 이름 변환용
 
-# 보조 정답: 고장 유형 4개 (TWF 공구 마모 / HDF 방열 / PWF 전력 / OSF 과부하)
+# 보조 정답(결론): 고장 유형 5개
+#   TWF 공구 마모 / HDF 방열 / PWF 전력 / OSF 과부하 / RNF 무작위
 # 입력이 아니라 '출력 쪽 정답'으로만 씀 → 데이터 누수 아님
-# 예측할 때는 입력 9개만 넣으면 되고, 유형 열은 필요 없음
-type_names = ['TWF', 'HDF', 'PWF', 'OSF']
+#   (유형을 입력에 넣으면 Machine failure = 유형 중 하나라도 1 이라서 정답이 그대로 샘)
+# 예측할 때는 입력 9개만 넣으면 되고, 유형은 모델이 결론으로 내놓음
+type_names = ['TWF', 'HDF', 'PWF', 'OSF', 'RNF']
 Y_type = data[type_names].to_numpy()
 
 # ──────────────────────────────────────────────────────────
@@ -115,7 +117,7 @@ print(f'기준선(전부 정상) 테스트 정확도: {(y_test == 0).mean():.4f}
 # [학습] 멀티태스크 신경망 정의 → 학습 1회
 #   공통 몸통: 은닉층 64-64(ReLU) — 두 출력이 같은 몸통을 공유
 #   출력 1 'fail'  : 고장 여부 1개(sigmoid)  ← 최종 판정·평가에 쓰는 출력
-#   출력 2 'types' : 고장 유형 4개(sigmoid)  ← 학습 때만 돕는 보조 출력
+#   출력 2 'types' : 고장 유형 5개(sigmoid)  ← 결론으로 함께 출력하는 고장 원인
 # 유형까지 맞히게 하면 몸통이 '원인별 경계'(전력 과소·과대, 방열, 과부하)를
 # 따로 배우게 되어 고장 여부 판정도 좋아지는 것이 목표
 # 가중치(class_weight)·증강은 쓰지 않음 (과검이 늘어 정밀도가 떨어지기 때문)
@@ -146,6 +148,15 @@ print('1. 정확도(Accuracy) :', f'{accuracy_score(y_test, y_pred):.4f}')
 print('2. 정밀도(Precision):', f'{precision_score(y_test, y_pred, zero_division=0):.4f}')
 print('3. 재현율(Recall)   :', f'{recall_score(y_test, y_pred):.4f}')
 print('   목표 정확도', TARGET_ACC, '→', '달성' if accuracy_score(y_test, y_pred) >= TARGET_ACC else '미달')
+
+# 결론: 고장 유형별 예측 성적 (유형 확률 0.5 이상이면 해당 유형으로 판정)
+t_pred = (p_types >= 0.5).astype(int)
+print('\n[고장 유형별 결론] 테스트셋')
+for i, name in enumerate(type_names):
+    n_true = int(T_test[:, i].sum())
+    n_hit = int(((T_test[:, i] == 1) & (t_pred[:, i] == 1)).sum())
+    n_false = int(((T_test[:, i] == 0) & (t_pred[:, i] == 1)).sum())
+    print(f'  {name}: 실제 {n_true:>2}건 중 {n_hit:>2}건 맞힘, 오탐 {n_false}건')
 
 # 모델 평가하기 (Keras 내장)
 # 출력: loss(전체 손실) / fail_loss·types_loss(출력별 손실) / fail_accuracy(고장 여부 정확도, 0.5 기준)
@@ -195,7 +206,8 @@ X_new = add_physics(X_new).to_numpy(dtype=float)   # 학습 때와 같은 방식
 X_new = sc.transform(X_new)
 pred_prob, type_prob = model.predict(X_new)
 print('예측 확률 [고장]:', pred_prob)              # 고장 여부 출력
-print('유형별 확률', type_names, ':', type_prob.round(4))   # 보조 출력 (참고용)
+print('유형별 확률', type_names, ':', type_prob.round(4))   # 결론: 고장 원인별 확률
+print('예측 유형:', [n for n, v in zip(type_names, type_prob.ravel()) if v >= 0.5] or '없음')
 
 pred = (pred_prob.ravel() >= 0.5).astype(int)       # 고장 확률 0.5 이상 → 고장(1)
 print('예측 번호:', pred)
