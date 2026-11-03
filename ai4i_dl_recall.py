@@ -1,211 +1,161 @@
-# 전처리, 표준화, 불균형 보정(재현율 개선)을 적용한 딥러닝
+# -*- coding: utf-8 -*-
+# AI4I 2020 예지보전 — 딥러닝 고장 분류 (정확도 99.5% 목표, 증강 없음)
 #
-# 전체 흐름 — '전처리'와 '표준화'는 서로 다른 단계:
-#   [전처리]    데이터의 내용·형태를 고침 (노이즈 행 제거, 특성 선택, 문자→숫자)
-#               → 행마다 독립적으로 정해지는 작업이라 분할 '전'에 전체에 해도 안전
-#   [분할]      훈련 60 / 검증 20 / 테스트 20
-#   [표준화]    값의 크기(스케일)만 맞춤 (평균 0, 표준편차 1)
-#               → 평균·표준편차라는 기준을 '배우는' 작업이라 분할 '후' 훈련셋으로만 fit
-#   [학습+교정] class_weight 후보를 검증셋 재현율로 교정 (루프)
-#   [최종 확인] 테스트셋 1회 측정 — 보고 재조정 금지
+# 전체 흐름
+#   [전처리]  라벨 모순 행 제거 → 입력 특성 선택 → 문자(Type)를 숫자로 인코딩
+#   [분할]    훈련 80% / 테스트 20%
+#   [표준화]  훈련셋 기준으로만 평균·표준편차를 배워서 양쪽에 적용
+#   [학습]    가중치·증강 없이 원래 데이터 분포 그대로 1회 학습
+#   [평가]    테스트셋으로 정확도·정밀도·재현율 측정
+#   [예측]    새 데이터 1건의 고장 여부 판정
+#
+# 결과를 읽을 때의 기준
+#   기준선: 전부 '정상'이라고 찍어도 정확도 ≈ 96.7% (고장이 3.3%뿐이라서)
+#           → 모델 정확도는 97%가 아니라 이 96.7% 대비 얼마나 올렸는지로 봐야 함
+#   상한  : 공구 마모 고장(TWF)은 200~240분 사이 무작위로 발생해서
+#           입력 6개로는 원리상 맞힐 수 없음 → 정확도 이론 상한 ≈ 99.57%
 
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.metrics import confusion_matrix, recall_score, precision_score, f1_score
+from sklearn.metrics import accuracy_score, recall_score, precision_score
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
+from tensorflow.keras.layers import Dense, Input
 import tensorflow as tf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# 재현성 고정: 신경망 초기 가중치·셔플의 난수열을 시드 0으로 고정
-# → 매 실행 동일한 결과. 0은 레시피 번호일 뿐, 다른 정수도 무방
+# 재현성 고정: 가중치 초기값·데이터 섞기 순서를 시드 0으로 고정 → 매번 같은 결과
 tf.keras.utils.set_random_seed(0)
 
-# 데이터 수집하기
-data = pd.read_csv(
-    Path('~/ws/robot/ai4i2020.csv').expanduser(),
-    encoding='utf-8-sig'
-)
+DIR = Path('~/ws/robot')
+TARGET_ACC = 0.995                      # 목표: 테스트 정확도 99.5% 이상
 
-# [전처리 1] 라벨 노이즈 제거 — 모순된 행을 지우는 '내용 정제'
-# 규칙: 고장 유형(TWF~RNF) 중 하나라도 1 ↔ Machine failure = 1 이어야 함
-flag_cols = ['TWF', 'HDF', 'PWF', 'OSF', 'RNF']
-flag_any = data[flag_cols].any(axis=1)        # 행별로 유형 중 하나라도 1이면 True
-mf = data['Machine failure'] == 1
+# ──────────────────────────────────────────────────────────
+# [전처리 1] 라벨 모순 행 제거
+# 규칙: 고장 유형(TWF·HDF·PWF·OSF·RNF) 중 하나라도 1이면 Machine failure도 1이어야 함
+# 이 규칙이 어긋난 27행(유형 표시 있는데 고장 0: 18행 / 유형 없는데 고장 1: 9행)은
+# 어느 쪽이 맞는지 알 수 없어서 고치지 않고 뺌 → 9,973행 남음
+# ──────────────────────────────────────────────────────────
+data = pd.read_csv(DIR / 'ai4i2020.csv', encoding='utf-8-sig')
+flag_any = data[['TWF','HDF','PWF','OSF','RNF']].any(axis=1)
+data = data[flag_any == (data['Machine failure'] == 1)].reset_index(drop=True)
 
-noise = flag_any != mf                        # 플래그와 라벨이 모순인 행 (18+9=27)
-print('제거할 노이즈 행 수:', noise.sum())    # 27
-data = data[~noise].reset_index(drop=True)    # ~ = 반전: 모순 없는 행만 남김
-print('노이즈 제거 후 데이터 수:', len(data)) # 9973
+# ──────────────────────────────────────────────────────────
+# [전처리 2] 입력 특성 선택
+# 제외: UDI·Product ID(단순 식별 번호), TWF~RNF(고장 유형 = 정답이 새는 열)
+# ──────────────────────────────────────────────────────────
+feats = ['Type','Air temperature [K]','Process temperature [K]',
+         'Rotational speed [rpm]','Torque [Nm]','Tool wear [min]']
+X = data[feats].copy()
 
-# [전처리 2] 특성 선택 — 입력으로 쓸 열만 고름
-# 제외: UDI·Product ID(단순 식별자), 고장 유형 TWF~RNF(정답이 새는 누수 열)
-feature_names = [
-    'Type',
-    'Air temperature [K]',
-    'Process temperature [K]',
-    'Rotational speed [rpm]',
-    'Torque [Nm]',
-    'Tool wear [min]'
-]
+# [전처리 3] 인코딩: 품질 등급 문자를 숫자로 (알파벳순 H → 0, L → 1, M → 2)
+# encoder는 변수로 저장해 두었다가 새 데이터 예측 때 같은 규칙으로 다시 씀
+encoder = LabelEncoder()
+X['Type'] = encoder.fit_transform(X['Type'])
 
-X = data[feature_names].copy()
-y = data['Machine failure'].to_numpy()        # 0=정상, 1=고장
+y = data['Machine failure'].to_numpy()        # 정답: 0 = 정상, 1 = 고장
 target_names = np.array(['정상', '고장'])     # 예측 번호 → 이름 변환용
 
 # ──────────────────────────────────────────────────────────
-# [학습 전 1] 라벨 분포 확인
-# 고장이 약 3.3%뿐인 불균형 데이터
-#  → 정확도 대신 재현율을 목표 지표로 삼고 class_weight로 보정
+# [분할] 훈련 80% / 테스트 20%
+# 조정할 값(가중치·임계값)이 없어서 검증셋을 따로 두지 않음
+# stratify=y : 훈련·테스트 양쪽에 고장 비율(3.3%)을 똑같이 맞춤
+#              고장이 330건뿐이라 무작위로 나누면 테스트에 고장이 쏠리거나 모자랄 수 있음
 # ──────────────────────────────────────────────────────────
-print('고장 비율:', f'{y.mean():.4f}',
-      f'(정상 {np.sum(y == 0)} / 고장 {np.sum(y == 1)})')
-
-# [전처리 3] 인코딩 — 문자를 숫자로 바꾸는 '형태 변환' (값의 의미는 그대로)
-# Type: H → 0, L → 1, M → 2 (알파벳순)
-encoder = LabelEncoder()
-X['Type'] = encoder.fit_transform(X['Type'])
-X = X.to_numpy()
-
-# [분할] 훈련 60% / 검증 20% / 테스트 20%
-#   검증셋  → 학습 감시 + COST_RATIO 교정용 (몇 번이든 참고 가능)
-#   테스트셋 → 최종 확인 1회만
-# 전처리(위)는 분할 전에 끝내고, 표준화(아래)는 반드시 분할 뒤에 한다
-# stratify와 class_weight는 역할이 다름:
-#   stratify     = 분할을 공정하게 (세 세트에 고장이 고르게 들어가 채점이 믿을 만해짐)
-#   class_weight = 학습을 공정하게 (모델이 고장을 무시하지 않게)
-#   → 가중치를 써도 stratify는 필요: 고장 330건뿐이라 무작위 분할이면
-#     검증·테스트에 고장이 쏠리거나 모자라 재현율 측정 자체가 흔들림
-X_temp, X_test, y_temp, y_test = train_test_split(
-    X, y,
-    test_size=0.2,           # 전체 → 훈련몫 8 : 테스트 2
-    random_state=0,
-    stratify=y               # 양쪽의 고장 비율을 3.3%로 동일하게 (분할 공정성)
-)
-X_train, X_val, y_train, y_val = train_test_split(
-    X_temp, y_temp,
-    test_size=0.25,          # 훈련몫 안에서 검증 생성: 0.8 × 0.25 = 전체의 20%
-    random_state=0,
-    stratify=y_temp          # stratify는 불균형 자체를 못 고침 → 그건 class_weight 몫
-)
-
-print('훈련:', X_train.shape, '검증:', X_val.shape, '테스트:', X_test.shape)
-
-# [표준화] 전처리와 다른 점: 데이터를 '고치는' 게 아니라,
-# 훈련셋의 평균·표준편차라는 '기준을 배워서' 값의 크기만 맞추는 단계.
-# 기준을 배우기 때문에 반드시 분할 후, 훈련셋으로만 fit한다.
-# (검증·테스트까지 섞어 fit하면 시험 문제를 미리 본 셈 = 데이터 누수)
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)   # 평균·표준편차는 훈련셋에서만 계산(fit)
-X_val = scaler.transform(X_val)           # 훈련 기준을 적용만 — 다시 fit하면 데이터 누수
-X_test = scaler.transform(X_test)         # 동일
+X_train, X_test, y_train, y_test = train_test_split(
+    X.to_numpy(), y, test_size=0.2, random_state=0, stratify=y)
 
 # ──────────────────────────────────────────────────────────
-# [학습 전 2] class_weight 기본값 계산
-# 역빈도 가중치(정상 수 / 고장 수)를 주면 고장의 손실 비중이
-# 정확히 50%가 됨 = 고장 샘플을 복제해 50:50으로 불린 것과 동치.
-#
-# 단, 50%는 '최적점'이 아니라 비용 정보가 없을 때의 '출발점'.
-# 최적 가중치 ∝ (정상 수 × FN비용) / (고장 수 × FP비용) 이므로,
-# COST_RATIO(=FN비용/FP비용) 후보를 검증셋으로 비교해 고른다.
+# [표준화] 각 특성을 평균 0, 표준편차 1로 맞춤 (온도 300, 회전수 1500처럼 단위 차이 제거)
+# 평균·표준편차는 훈련셋에서만 계산(fit)하고, 테스트셋에는 그 기준을 적용만 함
+# → 테스트셋까지 섞어서 fit하면 시험 문제를 미리 본 셈(데이터 누수)
 # ──────────────────────────────────────────────────────────
-n_normal = (y_train == 0).sum()
-n_fail = (y_train == 1).sum()
-base_weight = n_normal / n_fail        # ≈ 29 (고장 비중 50%가 되는 값)
-
-def build_model():                            # 루프에서 후보마다 새 모델로 시작하기 위해 함수화
-    m = Sequential()
-    m.add(Dense(64, activation='relu', input_dim=6))   # 입력 = 특성 6개
-    m.add(Dense(64, activation='relu'))
-    m.add(Dense(2, activation='softmax'))     # 출력 [정상 확률, 고장 확률], 합 = 1
-    m.compile(
-        optimizer='adam',
-        loss='sparse_categorical_crossentropy',   # 정수 라벨(0/1)을 그대로 쓰는 분류 손실
-        metrics=['accuracy']                  # 참고용일 뿐 — 불균형에선 판단 지표로 안 씀
-    )
-    return m
+sc = StandardScaler()
+X_train = sc.fit_transform(X_train)
+X_test = sc.transform(X_test)
+print(f'훈련 {len(X_train)} / 테스트 {len(X_test)}')
+print(f'기준선(전부 정상) 테스트 정확도: {(y_test == 0).mean():.4f}')
 
 # ──────────────────────────────────────────────────────────
-# [학습 중 + 교정] 검증셋 전체로 COST_RATIO 교정 (루프)
-# 후보마다 재학습 → 검증 재현율로 채점 → 목표 달성하는
-# 가장 작은 비율 채택 (작을수록 오탐이 적으므로)
-# 테스트셋은 이 루프에 절대 쓰지 않는다
+# [학습] 신경망 정의 → 학습 1회
+# 은닉층 64-64(ReLU), 출력층 1개(sigmoid) = 고장 확률 0~1
+# 가중치(class_weight)·증강을 쓰지 않음: 고장을 인위적으로 부풀리면
+# 재현율은 오르지만 과검(양품을 고장으로 판정)이 늘어 정밀도가 떨어지기 때문
+# validation_data : 에폭마다 테스트 성적을 기록만 함(그래프용), 학습·조정에는 안 쓰임
 # ──────────────────────────────────────────────────────────
-TARGET_RECALL = 0.90                   # 목표: 고장의 90% 이상 잡기
-
-model = None
-for cost_ratio in [1.0, 2.0, 3.0, 5.0]:       # 1.0 = 50:50 출발점, 키울수록 고장 쪽 편향
-    class_weight = {0: 1.0, 1: cost_ratio * base_weight}
-    m = build_model()
-    hist = m.fit(
-        X_train, y_train,
-        epochs=50,
-        validation_data=(X_val, y_val),       # 에폭마다 검증 성적 기록 → 과적합 감시
-        class_weight=class_weight,            # 고장 손실 ×가중치 = 복제 오버샘플링과 동치
-        verbose=0
-    )
-    val_pred = np.argmax(m.predict(X_val, verbose=0), axis=1)   # 확률 큰 쪽(0.5 기준) 판정
-    val_recall = recall_score(y_val, val_pred)
-    val_precision = precision_score(y_val, val_pred)
-    print(f'COST_RATIO {cost_ratio:.1f} (가중치 1:{cost_ratio*base_weight:.0f})'
-          f' → 검증 재현율 {val_recall:.3f}, 검증 정밀도 {val_precision:.3f}')
-    if model is None or val_recall >= TARGET_RECALL:
-        model, history = m, hist       # 일단 채택
-    if val_recall >= TARGET_RECALL:
-        print(f'  → 목표({TARGET_RECALL}) 달성, COST_RATIO {cost_ratio} 확정')
-        break
-else:
-    print(f'  → 목표 미달: 마지막 모델 채택 (데이터 보강 필요 신호)')
+print(f'\n[학습] 가중치 없이 학습 (목표 정확도 ≥ {TARGET_ACC})')
+model = Sequential([
+    Input(shape=(6,)),                  # 입력 = 특성 6개
+    Dense(64, activation='relu'),
+    Dense(64, activation='relu'),
+    Dense(1, activation='sigmoid')      # 출력 1개 = 고장 확률 (0~1)
+])
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+history = model.fit(X_train, y_train, epochs=50, verbose=0,
+                    validation_data=(X_test, y_test))
 
 # ──────────────────────────────────────────────────────────
-# [학습 후] 최종 확인 — 교정이 끝난 모델을 테스트셋으로 1회만 측정
-# 재현율 = TP / (TP + FN) : 실제 고장 중 잡아낸 비율
-# 여기 결과를 보고 다시 조정하면 안 됨 (조정은 검증셋의 몫)
+# [평가] 테스트셋 지표 — 고장 확률 0.5 이상이면 고장(1)으로 판정
+#   정확도 : 전체 판정 중 맞힌 비율            (TP+TN) / 전체
+#   정밀도 : 고장이라고 판정한 것 중 진짜 고장   TP / (TP+FP)  → 낮으면 과검이 많음
+#   재현율 : 실제 고장 중 고장으로 잡아낸 비율   TP / (TP+FN)  → 낮으면 미검이 많음
 # ──────────────────────────────────────────────────────────
-test_prob = model.predict(X_test)
-y_pred = np.argmax(test_prob, axis=1)         # 고장 확률 ≥ 0.5 → 고장(1)
+y_pred = (model.predict(X_test, verbose=0).ravel() >= 0.5).astype(int)
+print('1. 정확도(Accuracy) :', f'{accuracy_score(y_test, y_pred):.4f}')
+print('2. 정밀도(Precision):', f'{precision_score(y_test, y_pred, zero_division=0):.4f}')
+print('3. 재현율(Recall)   :', f'{recall_score(y_test, y_pred):.4f}')
+print('   목표 정확도', TARGET_ACC, '→', '달성' if accuracy_score(y_test, y_pred) >= TARGET_ACC else '미달')
 
-cm = confusion_matrix(y_test, y_pred)
-print('\n=== 테스트셋 평가 ===')
-print('혼동행렬 [[TN FP], [FN TP]]:')
-print(cm)
-print('놓친 고장(FN):', cm[1, 0], '건 / 오탐(FP):', cm[0, 1], '건')   # FN이 가장 비싼 실수
-print('재현율(Recall) :', f'{recall_score(y_test, y_pred):.3f}')      # TP/(TP+FN): 실제 고장 중 잡은 비율
-print('정밀도(Precision):', f'{precision_score(y_test, y_pred):.3f}') # TP/(TP+FP): 고장 예측 중 진짜 비율
-print('F1 점수        :', f'{f1_score(y_test, y_pred):.3f}')          # 재현율·정밀도의 조화평균
-# 판단 기준: 재현율만 보면 안 됨 ('전부 고장' 예측도 재현율 100%)
-#  → 주 지표 = 재현율, 하한선 = 정밀도(감당 가능한 오탐 수)로 함께 판단
-# 검증 재현율보다 테스트 재현율이 조금 낮게 나오는 건 정상
-# (검증셋에 맞춰 고른 만큼의 차이 — 테스트 숫자가 진짜 실력)
+# 모델 평가하기 (Keras 내장)
+# 출력 순서: [손실, 정확도] — 정확도는 Keras도 0.5 기준으로 계산
+print('훈련 세트 평가:', model.evaluate(X_train, y_train))
+print('테스트 세트 평가:', model.evaluate(X_test, y_test))
 
-# 학습 과정 그래프 (검증셋 기준)
+# 학습 과정 그래프 — 훈련/테스트 손실이 함께 내려가면 정상,
+# 훈련 손실만 계속 내려가고 테스트 손실이 올라가면 과적합 신호
 epochs = np.arange(1, len(history.history['loss']) + 1)
 
 plt.figure(figsize=(7, 4))
-plt.plot(epochs, history.history['loss'], label='Training loss')
-plt.plot(epochs, history.history['val_loss'], label='Validation loss')
-plt.plot(epochs, history.history['accuracy'], label='Training acc')
-plt.plot(epochs, history.history['val_accuracy'], label='Validation acc')
+plt.plot(
+    epochs, history.history['loss'],
+    label='Training loss'
+)
+plt.plot(
+    epochs, history.history['val_loss'],
+    label='Validation loss'
+)
+plt.plot(
+    epochs, history.history['accuracy'],
+    label='Training acc'
+)
+plt.plot(
+    epochs, history.history['val_accuracy'],
+    label='Validation acc'
+)
 plt.xlabel('Epoch')
 plt.legend()
 plt.show()
 
-# 새로운 데이터 예측하기
+# ──────────────────────────────────────────────────────────
+# [예측] 새로운 데이터 1건
+# encoder.transform(['M']) → array([2])
+# encoder.transform(['M'])[0] → 2
 # 순서: Type, 공기 온도, 공정 온도, 회전 속도, 토크, 공구 마모
+# 샘플이 1개라도 2차원 (1, 6) 형태여야 함
+# ──────────────────────────────────────────────────────────
 X_new = np.array([[
-    encoder.transform(['M'])[0],              # 학습 때의 encoder 재사용: 'M' → 2
+    encoder.transform(['M'])[0],
     298.1, 308.6, 1551, 42.8, 0
-]])                                           # 2차원 (1, 6) 형태 — 샘플 1개도 배치 차원 필요
+]])
 
-X_new = scaler.transform(X_new)               # 학습 때 fit한 scaler 재사용 (새로 fit 금지)
-
-# 정상과 고장의 예측 확률
+# 학습 때 쓴 스케일러로 표준화한 뒤 예측 (새로 fit 금지)
+# 표준화를 빼면 298, 1551 같은 원래 값이 그대로 들어가 확률이 엉뚱하게 튐
+X_new = sc.transform(X_new)
 pred_prob = model.predict(X_new)
-print('예측 확률 [정상, 고장]:', pred_prob)
+print('예측 확률 [고장]:', pred_prob)              # 출력 1개 = 고장 확률
 
-pred = np.argmax(pred_prob, axis=1)           # 확률 큰 쪽 선택 (0.5 기준)
+pred = (pred_prob.ravel() >= 0.5).astype(int)       # 고장 확률 0.5 이상 → 고장(1)
 print('예측 번호:', pred)
-print('예측 결과:', target_names[pred])       # 0→정상, 1→고장
+print('예측 결과:', target_names[pred])             # 0 → 정상, 1 → 고장
